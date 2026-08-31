@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  passwordHash  String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts       Account[]
+  sessions       Session[]
+  socialAccounts SocialAccount[]
+  voiceProfiles  VoiceProfile[]
+  posts          Post[]
+  consents       Consent[]
+  auditLogs      AuditLog[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// A connected publishing destination (Instagram Business / Facebook Page).
+model SocialAccount {
+  id           String    @id @default(cuid())
+  userId       String
+  platform     Platform
+  /// Meta object id: IG user id or FB page id
+  externalId   String
+  username     String
+  displayName  String?
+  avatarUrl    String?
+  accessToken  String    @db.Text
+  tokenExpires DateTime?
+  /// Instagram publishing requires the owning Facebook Page.
+  pageId       String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  posts Post[]
+
+  @@unique([userId, platform, externalId])
+  @@index([userId])
+}
+
+enum Platform {
+  INSTAGRAM
+  FACEBOOK
+}
+
+/// The learned "voice" of the creator. This is what the AI writes as.
+model VoiceProfile {
+  id        String  @id @default(cuid())
+  userId    String
+  name      String
+  isDefault Boolean @default(false)
+
+  bio          String?    @db.Text
+  niche        String?
+  audience     String?
+  toneKeywords String[]   @default([])
+  forbidden    String[]   @default([])
+  emojiUsage   EmojiUsage @default(MODERATE)
+  hashtagCount Int        @default(8)
+  language     String     @default("en")
+
+  /// AI-synthesised style guide derived from the writing samples.
+  styleGuide   String?   @db.Text
+  styleGuideAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  samples WritingSample[]
+  posts   Post[]
+
+  @@index([userId])
+}
+
+enum EmojiUsage {
+  NONE
+  LIGHT
+  MODERATE
+  HEAVY
+}
+
+model WritingSample {
+  id             String   @id @default(cuid())
+  voiceProfileId String
+  content        String   @db.Text
+  source         String?
+  createdAt      DateTime @default(now())
+
+  voiceProfile VoiceProfile @relation(fields: [voiceProfileId], references: [id], onDelete: Cascade)
+
+  @@index([voiceProfileId])
+}
+
+model Post {
+  id     String @id @default(cuid())
+  userId String
+
+  socialAccountId String
+  voiceProfileId  String?
+
+  /// Raw creator input: idea, notes, transcript.
+  brief     String?   @db.Text
+  mediaUrls String[]  @default([])
+  mediaType MediaType @default(IMAGE)
+
+  caption  String   @db.Text
+  hashtags String[] @default([])
+
+  status      PostStatus @default(DRAFT)
+  scheduledAt DateTime?
+  publishedAt DateTime?
+
+  externalId String?
+  permalink  String?
+  error      String? @db.Text
+
+  /// Ethics: nothing publishes unless a human explicitly approved it.
+  approvedAt     DateTime?
+  approvedBy     String?
+  aiAssisted     Boolean   @default(true)
+  disclosureText String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  voiceProfile  VoiceProfile? @relation(fields: [voiceProfileId], references: [id], onDelete: SetNull)
+  generations   Generation[]
+
+  @@index([userId, status])
+  @@index([scheduledAt])
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  CAROUSEL
+}
+
+enum PostStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  REJECTED
+}
+
+/// Provenance for every AI generation — required for transparency.
+model Generation {
+  id     String  @id @default(cuid())
+  postId String?
+
+  provider  String
+  model     String
+  prompt    String @db.Text
+  output    String @db.Text
+  tokensIn  Int?
+  tokensOut Int?
+  latencyMs Int?
+
+  createdAt DateTime @default(now())
+
+  post Post? @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+}
+
+/// Explicit, revocable permission for the AI to write as the creator.
+model Consent {
+  id        String    @id @default(cuid())
+  userId    String
+  scope     String
+  granted   Boolean   @default(true)
+  grantedAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  entity    String?
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
